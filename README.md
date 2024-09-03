@@ -105,7 +105,7 @@ keepassx-cli tree pro
 keepassx-cli dump pro
 ```
 
-    Notes: The `dump` and `tree` commands remove duplicates entries
+   Note: The `dump` and `tree` commands remove duplicates entries
 
 Finally, to enable by default a single profile in your shell (ie, with direnv):
 ```
@@ -118,7 +118,7 @@ There are some key concepts to work with `keepassx-cli`.
 
 ### Configuration
 
-A default configuration is `/.config/keepassx-cli/conf.env`. This configuration is optional, and it is used when no profile is used (see below).
+A default configuration is `~/.config/keepassx-cli/conf.env`. This configuration is optional, and it is used when no profile is used (see below).
 
 
 It is always possible to edit configuration with your favorite text editor, the configuration syntax currently accept 2 keys. 
@@ -134,7 +134,6 @@ KC_DB=$HOME/Documents/MyVault.kbdx
 KC_PASS=
 ```
 
-    Note: There is no way to save kbdx password in keyring without profile.
 
 ### Profile management
 
@@ -150,11 +149,15 @@ To list profiles:
 keepassx-cli profile ls
 ```
 
-To save profile password (aka kbdx password):
+### Local keyring support (auto-unlock)
+
+To save profile password (aka kbdx password) into your keyring:
 ```
 keepassx-cli profile password john
 ```
-Password will ideally be saved in local keyring, or directly in clear text in the profile config file.
+Password will ideally be saved in local keyring, or directly in clear text in the profile config file when keyring is not enabled.
+
+   Note: There is no way to save kbdx password in keyring without profile.
 
 
 ### Command line usage
@@ -162,7 +165,7 @@ Password will ideally be saved in local keyring, or directly in clear text in th
 Command line usage:
 ```
 $ keepassx-cli --help
-keepassx-cli is command line tool
+keepassx-cli is command line tool to query keepass secrets.
 
 usage: keepassx-cli [OPTS] COMMAND [ARGS]
        keepassx-cli help
@@ -179,7 +182,7 @@ commands:
   profile password        PROFILE               Save database password in keyring
   profile rm              PROFILE               Remove profile
   profile show            PROFILE               Show profile configuration
-  shell                   [PROFILE]             Generate shell code to be sourced in shell
+  shell                   [PROFILE]             Enable a profile in shell session
   show                    [PROFILE] KEY         Show a key
   tree                    [PROFILE] [GROUP]     Dump as tree
 
@@ -198,14 +201,14 @@ options:
 info:
   config dir: ~/.config/keepassx-cli
   author: mrjk <mrjk<dot>78<at>gmail<dot>com>
-  version: 0.0.2-stable (2024-07-25)
+  version: 0.0.2-stable (2024-09-03)
   license: GPLv3
 
 ```
 
 ### Troubleshooting
 
-You can get information about your configuration with:
+You can get information about your configuration with. Be carefull, your password will be dumped in clear text if not stored in keyring:
 ```
 $ keepassx-cli info john
 KP_BIN=flatpak run --command=/app/bin/keepassxc-cli org.keepassxc.KeePassXC
@@ -241,6 +244,9 @@ Other alternatives than this project:
 
 ### License
 
-GPLv2
+Informations:
 
+* author: `mrjk <mrjk<dot>78<at>gmail<dot>com>`
+* version: `0.0.2`
+* license: GPLv3
 

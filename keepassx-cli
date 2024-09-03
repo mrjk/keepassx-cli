@@ -25,7 +25,7 @@ APP_REPO="https://github.com/$APP_AUTHOR/$APP_NAME.git"
 APP_GIT="git@github.com:$APP_AUTHOR/$APP_NAME.git"
 
 APP_STATUS=stable
-APP_DATE="2024-07-25"
+APP_DATE="2024-09-03"
 APP_VERSION=0.0.2
 
 #APP_DEPENDENCIES="column tree"
@@ -935,7 +935,7 @@ EOF
 
 cli__shell()
 {
-  : "[PROFILE],Generate shell code to be sourced in shell"
+  : "[PROFILE],Enable a profile in shell session"
 
   _parse__profile_key
   profile_init "$1"
