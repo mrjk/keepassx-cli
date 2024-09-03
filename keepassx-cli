@@ -28,23 +28,22 @@ APP_STATUS=stable
 APP_DATE="2024-07-25"
 APP_VERSION=0.0.2
 
-#APP_DEPENDENCIES="column tree htop"
+#APP_DEPENDENCIES="column tree"
 APP_LOG_SCALE="TRACE:DEBUG:RUN:INFO:DRY:HINT:NOTICE:CMD:USER:WARN:ERR:ERROR:CRIT:TODO:DIE:PROMPT"
 
 APP_DRY=${APP_DRY:-false}
 APP_FORCE=${APP_FORCE:-false}
-APP_LOG_LEVEL=INFO
-#APP_LOG_LEVEL=DRY
-#APP_LOG_LEVEL=DEBUG
-
+APP_LOG_LEVEL=INFO  # DRY, DEBUG, TRACE
 
 SCRIPT_REAL_PATH=$(realpath "$0")
 SCRIPT_REAL_DIR=$( cd -- "$( dirname -- "$SCRIPT_REAL_PATH" )" &> /dev/null && pwd )
-#APP_REAL_NAME=$(basename "$SCRIPT_REAL_PATH")
-APP_REAL_NAME='keepassx-cli'
+APP_REAL_NAME='keepassx-cli'  # APP_REAL_NAME=$(basename "$SCRIPT_REAL_PATH")
 
 APP_CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_REAL_NAME
 APP_CONFIG_PREFIX='conf.'
+
+APP_IS_INTERACTIVE=${APP_IS_INTERACTIVE:-$([ -t 0 ] && echo true || echo false)}
+
 
 # CLI libraries
 # =================
@@ -53,7 +52,6 @@ _log ()
 {
   # [ -o errexit ] && { set +x ; local _trace=false; } || local _trace=true
   
-
   local lvl="${1:-DEBUG}"
   shift 1 || true
 
@@ -318,6 +316,12 @@ _confirm () {
 
 # Ask the user to input string
 _input () {
+
+  [[ "$APP_NO_PROMPT" == false ]] || {
+    _log ERROR "App is not in interactive mode, use '--prompt' instead"
+    return 1
+  }
+
   local msg=$1
   local default=${2-}
   >&2 printf "%s" "${1:-$msg}${default:+ [$default]}: "
@@ -328,13 +332,19 @@ _input () {
 
 # Ask user to input a secret
 _input_secret () {
+  export REPLY=
+
+  [[ "$APP_NO_PROMPT" == false ]] || {
+    _log WARN "No provided password and prompt is disabled."
+    _log HINT "Use '$APP_NAME --prompt' flag for interactive prompt"
+    return 1
+  }
+
   local msg=$1
   local default=${2-}
-  >&2 printf "%s" "${1:-$msg}${default:+ [$default]}: "
+  >&2 printf "%s%s\n" "${1:-$msg}" "${default:+ [$default]}:"
   >&2 read -s REPLY
   [[ -n "$REPLY" ]] || REPLY=${default}
-  printf "%s" "$REPLY"
-  >&2 echo ''
 }
 
 
@@ -379,7 +389,7 @@ kc_init ()
   elif [[ ! -f "${KC_DB:-}" ]]; then
     _die 5 "Keepass db file does not exists: $KC_DB"
   fi
-  
+
   # Ensure password is set
   local methods="keyring_gnome prompt"
   for method in $methods; do
@@ -398,11 +408,15 @@ kc_init ()
         ;;
       prompt)
         _log DEBUG "Try to fetch keepass secret from prompt ..."
-        KC_PASS=$(_input_secret "Database password")
+        _input_secret "Database password" || \
+          {
+            _log HINT "Use '$APP_NAME --prompt profile password $KC_PROFILE' to save in local keyring"
+            _die $? "Failed to retrieve database password"
+          }
+        KC_PASS=$REPLY
         ;;
       *)
-        _log ERROR "Unsupported password method: $method"
-        return 1
+        _die 1 "Unsupported password method: $method"
         ;;
     esac
   done
@@ -410,8 +424,7 @@ kc_init ()
 
   # Failure management
   if [[ -z "${KC_PASS:-}" ]]; then
-    _log ERROR "Could not find a password to unlock keepaaxc database"
-    return 1
+    _die 1 "Could not find a password to unlock keepaaxc database: $KC_DB"
   fi
 }
 
@@ -426,7 +439,15 @@ kc_cli ()
   # _log DEBUG "ARG5=${5:-}"
   # _log DEBUG "ARG6=${6:-}"
 
+  if [[ -z "$KC_PASS" ]]; then
+    [[ "$APP_NO_PROMPT" == false ]] \
+      && _log WARN "No password provided, expect prompt!" \
+      || _die 1 "No provided password as prompt is disabled."
+  fi
+
+
   local result=
+  local rc=
   local full_cmd1="$1 '$KC_DB' ${2:+'$2'}${3:+ '$3'}"
   local full_cmd="$1 \"$KC_DB\" ${2:+\"$2\"}${3:+ \"$3\"}"
   _log DEBUG "Full command: $KP_BIN ${full_cmd}"
@@ -437,53 +458,32 @@ kc_cli ()
     spawn $KP_BIN $full_cmd; 
     expect "Enter password to unlock"; 
     send "$KC_PASS\r"; 
-    interact;
+
+    expect {
+        eof
+    }
+
+    catch wait result
+    puts "\$expect_out(buffer)"
+    exit [lindex \$result 3]
 EOF
   )
 
   # Run expect keepassxc with expect
   # result=$( expect -f <( echo "$expect_script")
-  result=$( expect -c "$expect_script" )
+  result=$( expect -c "$expect_script")
+  rc=$?
 
   # Validate result
-  if grep -q 'Could not find entry' <<< "$result"; then
-    >&2 echo "ERROR: Could not find entry matching key '$args' in: $KC_DB"
-    return 1
-  fi
-  grep -v '^Enter password to unlock ' <<< "$result"
-
-}
-
-# Generic API to query keepass DB
-kc_cli_v1 ()
-{
-  # set -x
-  local opts=$1
-  shift 1 || true
-  #local args=$@
-
-  #local arg1="'${1:-}'"
-  #local arg2="'${2:-}'"
-
-  local cmd_sufix="${1:+\"$1\"}${2:+ \"$2\"}"
-  local result=$(expect -c '
-    log_user 0; 
-    spawn '"$KP_BIN"' '"$opts"' "'"$KC_DB"'" '"$cmd_sufix"'; 
-    expect "Enter password to unlock"; 
-    send "'"$KC_PASS"'\r"; 
-    interact;'
-  )
-  #local result=$(expect -c '
-  #  log_user 0; 
-  #  spawn '"$KP_BIN"' '"$opts"' "'"$KC_DB"'" "'"$1"'" "'"${2-}"'"; 
-  #  expect "Enter password to unlock"; 
-  #  send "'"$KC_PASS"'\r"; 
-  #  interact;'
-  #)
-
-  if grep -q 'Could not find entry' <<< "$result"; then
-    >&2 echo "ERROR: Could not find entry matching key: $args"
-    return 1
+  if [[ "$rc" -ne 0 ]]; then
+    if grep -q 'Invalid credentials' <<< "$result" ; then
+      _die 1 "Database credential is invalid for: $KC_DB"
+    else
+      echo "$result" | _log ERROR -
+    fi
+    _die 1 "Something went wrong with keepass backend"
+  elif grep -q 'Could not find entry' <<< "$result"; then
+    _die 1 "Could not find entry matching key '$KC_KEY' in: $KC_DB"
   fi
   grep -v '^Enter password to unlock ' <<< "$result"
 
@@ -492,8 +492,9 @@ kc_cli_v1 ()
 # Extract a single password
 kc_get ()
 {
-  local result=$(kc_cli "show -s" "$@")
+  local result=
 
+  result=$(kc_cli "show -s" "$@")
   if grep -q 'Could not find entry' <<< "$result"; then
     >&2 echo "ERROR: Could not find password matching key: $args"
     return 1
@@ -533,7 +534,7 @@ gnome_keyring_password_get ()
 
   gnome_keyring_is_available
 
-  local result=$(secret-tool lookup keepass_profile "$name")
+  local result=$(secret-tool lookup keepassx-cli-profile "$name")
   if [[ -n "$result" ]]; then
     _log DEBUG "Password found in gnome-keyring for: $name"
     echo "$result"
@@ -551,11 +552,12 @@ gnome_keyring_password_set ()
   local pass=$2
   local path=$3
   local file=${path##*/}
+  local rc=0
 
   gnome_keyring_is_available
 
   # Clean existing entry
-  secret-tool clear keepass_profile "$name"
+  secret-tool clear keepassx-cli-profile "$name"
   if [[ -z "$pass" ]]; then
     _log DEBUG "Keyring password entry cleared: $KEYRING_NAME_PREFIX$name"
     return
@@ -565,11 +567,18 @@ gnome_keyring_password_set ()
   printf '%s' "$pass" \
     | secret-tool store \
       --label="$KEYRING_NAME_PREFIX$name" \
-      keepass_profile "$name" \
-      keepass_path "$path" \
-      keepass_file "$file" 
-  _log DEBUG "Keyring password entry created: $KEYRING_NAME_PREFIX$name"
+      application "$APP_NAME" \
+      keepassx-cli-profile "$name" \
+      keepassx-cli-path "$path" \
+      keepassx-cli-file "$file" \
+    || rc=$?
 
+  # Report to user
+  if [[ "$rc" -ne 0 ]]; then
+    _log HINT "Check your keyring is correctly unlocked or disable keyring with '--keyring false' option."
+    _die $rc "Something wrong happened with keyring"
+  fi
+  _log DEBUG "Keyring password entry created: $KEYRING_NAME_PREFIX$name"
 }
 
 
@@ -743,11 +752,13 @@ EOF
 # Set profile password
 profile_password_set ()
 {
-  #set -x
   local name=${1:-}
   local password=${2:-}
   local target=
   target=$(profile_path "$name")
+
+  # Enable interactive mode
+  export APP_NO_PROMPT=false
 
   # Check for password
   # ---------------------------
@@ -756,12 +767,16 @@ profile_password_set ()
     _log WARN "Password can only be saved in clear text. Leave empty to always prompt user."
     store_method=clear_text
   fi
-  password=$(_input_secret "Database password" "$password")
+  _input_secret "Database password" "$password" \
+    || _die $? "Failed to retrieve database password"
+  password=$REPLY
 
   # User confirmation
   # ---------------------------
   local confirmed=true
-  if [[ -z "$password" ]] && ! $APP_FORCE ; then
+  if [[ "$APP_IS_INTERACTIVE" == "true" ]] ; then
+    confirmed=true
+  elif [[ -z "$password" ]] && ! $APP_FORCE ; then
     _log WARN "You have entered no password, so '$name' passwords will be removed from config and keyring."
     confirmed=$(_confirm "Do you really want to delete '$name' password?")
   fi
@@ -786,7 +801,8 @@ profile_password_set ()
       fi
       
       # Save in keyring
-      gnome_keyring_password_set "$name" "$password" "$KC_DB"
+      gnome_keyring_password_set "$name" "$password" "$KC_DB" \
+        || _die $? "Failed"
 
       # Always remove password from conf when in keyring
       _log DEBUG "Remove any password occurences in profile"
@@ -898,11 +914,11 @@ app_info ()
   cat <<EOF
 KP_BIN=$KP_BIN
 
-KEEPASS_CLIENT_KEY=$KC_KEY
-KEEPASS_CLIENT_PROFILE=$KC_PROFILE
-KEEPASS_CLIENT_DB=$KC_DB
-KEEPASS_CLIENT_CONF=$KC_CONF
-KEEPASS_CLIENT_PASS=${KC_PASS//[^ ]/*}
+KEEPASSX_CLI__KEY=$KC_KEY
+KEEPASSX_CLI__PROFILE=$KC_PROFILE
+KEEPASSX_CLI__DB=$KC_DB
+KEEPASSX_CLI__CONF=$KC_CONF
+KEEPASSX_CLI__PASS=${KC_PASS//[^ ]/*}
 
 APP_REAL_NAME=$APP_REAL_NAME
 SCRIPT_PATH=$SCRIPT_PATH
@@ -921,24 +937,24 @@ cli__shell()
 {
   : "[PROFILE],Generate shell code to be sourced in shell"
 
-  _parse__profile_key "$@"
-  profile_init
+  _parse__profile_key
+  profile_init "$1"
   local script_path=$( path_nicer "$SCRIPT_PATH" )
 
 
   cat <<EOF
 # eval "\$( $script_path shell $KC_PROFILE)"
 
-export KEEPASS_CLIENT_BIN=$script_path
+export KEEPASSX_CLI__BIN=$script_path
 EOF
 
   if [[ -n "${KC_PROFILE:-}" ]]; then
-    echo "export KEEPASS_CLIENT_PROFILE=$KC_PROFILE"
+    echo "export KEEPASSX_CLI__PROFILE=$KC_PROFILE"
   else
     cat <<EOF
-export KEEPASS_CLIENT_DB=$KC_DB
-export KEEPASS_CLIENT_KEY=$KC_KEY
-export KEEPASS_CLIENT_PASS=${KC_PASS}
+export KEEPASSX_CLI__DB=$KC_DB
+export KEEPASSX_CLI__KEY=$KC_KEY
+export KEEPASSX_CLI__PASS=${KC_PASS}
 
 EOF
   fi
@@ -1121,11 +1137,10 @@ cli__profile__add()
 
 cli__profile__password()
 {
-  : "PROFILE,Set profile database password"
+  : "PROFILE,Save database password in keyring"
   local name=$1
 
   profile_init "$name" || return $?
-  # set -x
   profile_password_set "$@"
 }
 
@@ -1141,7 +1156,9 @@ cli__profile__rm()
 
   # Confirmation
   local confirmed=true
-  if ! $APP_FORCE ; then
+  if [[ "$APP_IS_INTERACTIVE" == "true" ]] ; then
+    confirmed=true
+  elif ! $APP_FORCE ; then
     confirmed=$(_confirm "Do you really want to delete profile '$name' in '$target' ?")
   fi
   if [[ "$confirmed" != 'true' ]]; then
@@ -1203,16 +1220,18 @@ cli_init ()
   # Default settings
   export APP_DB_DIR=.
 
-  export KC_PROFILE=${KEEPASS_CLIENT_PROFILE:-}
-  export KC_KEY=${KEEPASS_CLIENT_KEY:-}
-  export KC_DB=${KEEPASS_CLIENT_DB:-}
-  export KC_PASS=${KEEPASS_CLIENT_PASS:-}
-  export KC_CONF=${KEEPASS_CLIENT_CONF:-}
-  export KC_KEYRING=${KEEPASS_KEYRING:-}
+  export APP_NO_PROMPT=${KEEPASSX_CLI__NO_PROMPT:-true}
+
+  export KC_PROFILE=${KEEPASSX_CLI__PROFILE:-}
+  export KC_KEY=${KEEPASSX_CLI__KEY:-}
+  export KC_DB=${KEEPASSX_CLI__DB:-}
+  export KC_PASS=${KEEPASSX_CLI__PASS:-}
+  export KC_CONF=${KEEPASSX_CLI__CONF:-}
+  export KC_KEYRING=${KEEPASSX_CLI__KEYRING:-}
 
   if [[ -z "${KC_KEYRING}" ]]; then
     KC_KEYRING=$(KC_KEYRING=true gnome_keyring_is_available && echo true || echo false)
-    KEYRING_NAME_PREFIX='KeePass - '
+    KEYRING_NAME_PREFIX='keepassx-cli: '
   fi
 
   export KC_IN_VAULT=false
@@ -1225,7 +1244,7 @@ cli_init ()
 cli_usage ()
 {
   cat <<EOF
-${APP_NAME} is command line tool
+${APP_NAME} is command line tool to query keepass secrets.
 
 usage: ${APP_NAME} [OPTS] COMMAND [ARGS]
        ${APP_NAME} help
@@ -1294,9 +1313,15 @@ cli_options ()
           f*|F*) KC_KEYRING=false; shift 1 ;;
           *) KC_KEYRING=true ;;
         esac
-        
         _log DEBUG "Fetch password from keyring: $KC_KEYRING"
         shift 1
+        ;;
+
+      -t|--prompt)
+        : ",Prompt password if missing"
+        _log DEBUG "Prompt if missing mode enabled"
+        APP_NO_PROMPT=false
+        shift
         ;;
 
       # Generic
